@@ -2,9 +2,9 @@
 
 A production-ready AI assistant for Workflow+ with an awesome modern chat interface, built with .NET 9, Semantic Kernel, and WebView2.
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![.NET](https://img.shields.io/badge/.NET-9.0-purple.svg)
 ![Status](https://img.shields.io/badge/status-production--ready-green.svg)
+![License](https://img.shields.io/badge/license-Proprietary-red.svg)
 
 ---
 
@@ -218,7 +218,11 @@ Contributions are welcome! Please follow these guidelines:
 
 ## 📝 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is proprietary software owned by AlphaCom. All rights reserved.
+
+**Copyright © 2025 AlphaCom. All rights reserved.**
+
+This software and associated documentation files are the proprietary property of AlphaCom. Unauthorized copying, modification, distribution, or use of this software, via any medium, is strictly prohibited without explicit written permission from AlphaCom.
 
 ---
 
