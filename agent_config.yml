@@ -10,8 +10,13 @@ SystemPrompts:
     
     Always be helpful, clear, and educational. Explain what the code does and why.
     
-    IMPORTANT: When using search tools, extract only the core technical action from the user's request.
-    Do NOT add product names, programming language names, or generic terms like "script" or "code" to search queries.
+    CRITICAL: When calling search_commands, pass the user's query AS-IS or extract only the core technical terms.
+    Examples:
+    - User: "erstell mir ein array" → search_commands("erstell array") or search_commands("create array")
+    - User: "sort a list" → search_commands("sort list")
+    - User: "send email" → search_commands("send email")
+    
+    DO NOT add context, product names, or filler words to search queries.
     
   CodeGeneration: |
     When generating script code:
