@@ -8,36 +8,49 @@ using Serilog;
 namespace WorkflowPlus.AIAgent.Tools;
 
 /// <summary>
-/// Tool for searching Workflow+ documentation using the AiSearch service.
-/// Enhanced with query refinement and intelligent search strategies.
+/// State-of-the-art search tool with HyDE and query expansion.
+/// Uses advanced RAG techniques to improve retrieval quality.
 /// </summary>
 public class SearchKnowledgeTool
 {
     private readonly HttpClient _httpClient;
     private readonly ILogger _logger;
+    private readonly QueryEnhancer? _queryEnhancer;
     private const string AiSearchBaseUrl = "http://localhost:54321";
 
-    public SearchKnowledgeTool()
+    public SearchKnowledgeTool(QueryEnhancer? queryEnhancer = null)
     {
         _httpClient = new HttpClient
         {
             BaseAddress = new Uri(AiSearchBaseUrl),
-            Timeout = TimeSpan.FromSeconds(10)
+            Timeout = TimeSpan.FromSeconds(15) // Increased for HyDE processing
         };
         _logger = Log.ForContext<SearchKnowledgeTool>();
+        _queryEnhancer = queryEnhancer;
     }
 
     [KernelFunction("search_commands")]
-    [Description("Search documentation for commands and functions. Pass clean, minimal search queries (e.g., 'create array', 'sort list', 'send email').")]
+    [Description("Search documentation for commands using state-of-the-art RAG techniques. Pass clean queries.")]
     public async Task<string> SearchCommandsAsync(
         [Description("Search query - keep it simple and technical (e.g., 'create array', 'sort list')")] string query,
         [Description("Maximum number of results to return (default 5)")] int maxResults = 5)
     {
         _logger.Information("Searching documentation for: {Query}", query);
 
-        // Just search directly - let the LLM formulate good queries via prompts
-        var results = await ExecuteSearchAsync(query, maxResults);
-        
+        List<CommandMatch> results;
+
+        // STATE-OF-THE-ART: Use HyDE and query expansion if available
+        if (_queryEnhancer != null)
+        {
+            _logger.Information("Using advanced query techniques (HyDE + Expansion)");
+            results = await SearchWithAdvancedTechniquesAsync(query, maxResults);
+        }
+        else
+        {
+            // Fallback to direct search
+            results = await ExecuteSearchAsync(query, maxResults);
+        }
+
         if (results.Count == 0)
         {
             return $"No commands found for query: {query}";
@@ -78,6 +91,88 @@ public class SearchKnowledgeTool
     }
 
 
+
+    /// <summary>
+    /// STATE-OF-THE-ART: Search using HyDE and query expansion.
+    /// This combines multiple advanced techniques for superior retrieval quality.
+    /// </summary>
+    private async Task<List<CommandMatch>> SearchWithAdvancedTechniquesAsync(string query, int maxResults)
+    {
+        var allResults = new Dictionary<string, CommandMatch>(); // Deduplicate by command name
+        var resultScores = new Dictionary<string, List<float>>(); // Track scores for averaging
+
+        try
+        {
+            // Clean the query
+            var cleanedQuery = _queryEnhancer!.CleanQuery(query);
+
+            // Technique 1: Search with original cleaned query
+            var originalResults = await ExecuteSearchAsync(cleanedQuery, maxResults);
+            foreach (var result in originalResults)
+            {
+                if (!allResults.ContainsKey(result.Name))
+                {
+                    allResults[result.Name] = result;
+                    resultScores[result.Name] = new List<float>();
+                }
+                resultScores[result.Name].Add(result.Score * 1.0f); // Base weight
+            }
+
+            // Technique 2: HyDE - Generate hypothetical document and search
+            var hypotheticalDoc = await _queryEnhancer.GenerateHypotheticalDocumentAsync(query);
+            var hydeResults = await ExecuteSearchAsync(hypotheticalDoc, maxResults);
+            foreach (var result in hydeResults)
+            {
+                if (!allResults.ContainsKey(result.Name))
+                {
+                    allResults[result.Name] = result;
+                    resultScores[result.Name] = new List<float>();
+                }
+                resultScores[result.Name].Add(result.Score * 0.8f); // Slightly lower weight
+            }
+
+            // Technique 3: Query Expansion - Search multiple variations
+            var expandedQueries = await _queryEnhancer.ExpandQueryAsync(cleanedQuery);
+            foreach (var expandedQuery in expandedQueries.Take(2)) // Limit to 2 to control latency
+            {
+                var expandedResults = await ExecuteSearchAsync(expandedQuery, maxResults);
+                foreach (var result in expandedResults)
+                {
+                    if (!allResults.ContainsKey(result.Name))
+                    {
+                        allResults[result.Name] = result;
+                        resultScores[result.Name] = new List<float>();
+                    }
+                    resultScores[result.Name].Add(result.Score * 0.7f); // Lower weight for expansions
+                }
+            }
+
+            // Aggregate scores: average all scores for each command
+            foreach (var name in allResults.Keys.ToList())
+            {
+                var avgScore = resultScores[name].Average();
+                var match = allResults[name];
+                match.Score = avgScore;
+                allResults[name] = match;
+            }
+
+            // Return top results by aggregated score
+            var finalResults = allResults.Values
+                .OrderByDescending(r => r.Score)
+                .Take(maxResults)
+                .ToList();
+
+            _logger.Information("Advanced search returned {Count} unique results (from {Total} total hits)",
+                finalResults.Count, resultScores.Sum(kvp => kvp.Value.Count));
+
+            return finalResults;
+        }
+        catch (Exception ex)
+        {
+            _logger.Error(ex, "Advanced search failed, falling back to basic search");
+            return await ExecuteSearchAsync(query, maxResults);
+        }
+    }
 
     /// <summary>
     /// Execute a single search query

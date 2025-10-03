@@ -27,18 +27,24 @@ public class AgentOrchestrator
         // Build Semantic Kernel
         var builder = Kernel.CreateBuilder();
         builder.AddOpenAIChatCompletion(_settings.DefaultModel, apiKey);
-        
-        // Register tools
-        builder.Plugins.AddFromType<SearchKnowledgeTool>();
-        builder.Plugins.AddFromType<ScriptValidationTool>();
-        
+
         _kernel = builder.Build();
         _chatService = _kernel.GetRequiredService<IChatCompletionService>();
-        
+
+        // STATE-OF-THE-ART: Create query enhancer for advanced RAG
+        var queryEnhancer = new QueryEnhancer(_chatService);
+
+        // Register tools with advanced capabilities
+        builder.Plugins.AddFromObject(new SearchKnowledgeTool(queryEnhancer), "SearchKnowledge");
+        builder.Plugins.AddFromType<ExampleScriptMatcher>();
+        builder.Plugins.AddFromType<ScriptValidationTool>();
+
+        _kernel = builder.Build();
+
         // Initialize chat history with system prompt
         _history = new ChatHistory(_settings.SystemPrompt);
-        
-        _logger.Information("AgentOrchestrator initialized with model {Model}", _settings.DefaultModel);
+
+        _logger.Information("AgentOrchestrator initialized with model {Model} and advanced RAG techniques", _settings.DefaultModel);
     }
 
     /// <summary>
@@ -146,55 +152,153 @@ public class AgentOrchestrator
     }
 
     /// <summary>
-    /// Generate code with reflection (self-review).
+    /// STATE-OF-THE-ART: Generate code with structured reflection.
+    /// Uses JSON schema for reliable, machine-readable reviews.
     /// </summary>
     public async Task<CodeGenerationResult> GenerateCodeWithReflectionAsync(string userIntent)
     {
-        _logger.Information("Generating code with reflection for: {Intent}", userIntent);
+        _logger.Information("Generating code with structured reflection for: {Intent}", userIntent);
 
         // Step 1: Generate initial code
         var codePrompt = $"{_settings.CodeGenerationPrompt}\n\nUser request: {userIntent}";
         var initialCode = await InvokePromptAsync(codePrompt);
 
-        // Step 2: Self-review loop
+        // Step 2: Structured self-review loop
         for (int attempt = 0; attempt < _settings.MaxReflectionIterations; attempt++)
         {
             _logger.Debug("Reflection iteration {Iteration}", attempt + 1);
 
-            var reviewPrompt = $@"{_settings.ReflectionPrompt}
+            var review = await GetStructuredCodeReviewAsync(initialCode);
 
-Code to review:
-```
-{initialCode}
-```
-
-Check for errors and respond with either 'APPROVED' or specific fixes needed.";
-
-            var review = await InvokePromptAsync(reviewPrompt);
-
-            if (review.Contains("APPROVED", StringComparison.OrdinalIgnoreCase))
+            // Check approval with confidence threshold
+            if (review.IsApproved && review.ConfidenceScore >= 80 && !review.HasCriticalIssues())
             {
-                _logger.Information("Code approved after {Iterations} iterations", attempt + 1);
+                _logger.Information("Code approved after {Iterations} iterations (Score: {Score}, Issues: {Issues})",
+                    attempt + 1, review.OverallQualityScore, review.TotalIssueCount());
                 return CodeGenerationResult.Success(initialCode, attempt + 1);
             }
 
-            // Apply fixes
-            var fixPrompt = $@"Apply these fixes to the code:
+            // Log issues for debugging
+            _logger.Information("Review found {IssueCount} issues (Confidence: {Confidence})",
+                review.TotalIssueCount(), review.ConfidenceScore);
 
-{review}
+            if (review.HasCriticalIssues())
+            {
+                _logger.Warning("Critical issues found: {CriticalCount}",
+                    review.SyntaxErrors.Count(e => e.Severity == "critical"));
+            }
+
+            // Apply fixes based on structured feedback
+            initialCode = await ApplyStructuredFixesAsync(initialCode, review);
+        }
+
+        _logger.Warning("Max reflection iterations reached");
+        return CodeGenerationResult.WithWarning(initialCode,
+            "Max reflection iterations reached. Code may need manual review.");
+    }
+
+    private async Task<CodeReview> GetStructuredCodeReviewAsync(string code)
+    {
+        var reviewPrompt = $@"{_settings.ReflectionPrompt}
+
+Code to review:
+```
+{code}
+```
+
+Return a JSON object with this exact structure:
+{{
+  ""is_approved"": true/false,
+  ""confidence_score"": 0-100,
+  ""syntax_errors"": [{{""line"": 5, ""severity"": ""error"", ""description"": ""...", ""suggested_fix"": ""...""}}],
+  ""logic_issues"": [],
+  ""best_practice_violations"": [],
+  ""security_concerns"": [],
+  ""suggested_improvements"": [""...""],
+  ""overall_quality_score"": 0-100
+}}
+
+JSON:";
+
+        try
+        {
+            var response = await InvokePromptAsync(reviewPrompt);
+
+            // Extract JSON from response (handles markdown code blocks)
+            var jsonStart = response.IndexOf('{');
+            var jsonEnd = response.LastIndexOf('}');
+            if (jsonStart >= 0 && jsonEnd > jsonStart)
+            {
+                var json = response.Substring(jsonStart, jsonEnd - jsonStart + 1);
+                var review = System.Text.Json.JsonSerializer.Deserialize<CodeReview>(json);
+                if (review != null)
+                    return review;
+            }
+
+            _logger.Warning("Failed to parse structured review, using fallback");
+            return new CodeReview
+            {
+                IsApproved = false,
+                ConfidenceScore = 50,
+                LogicIssues = new List<CodeIssue>
+                {
+                    new CodeIssue { Severity = "warning", Description = "Unable to perform structured review" }
+                },
+                OverallQualityScore = 50
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.Error(ex, "Error getting structured review");
+            return new CodeReview { IsApproved = false, ConfidenceScore = 0, OverallQualityScore = 0 };
+        }
+    }
+
+    private async Task<string> ApplyStructuredFixesAsync(string code, CodeReview review)
+    {
+        var issuesDescription = new StringBuilder();
+
+        if (review.SyntaxErrors.Any())
+        {
+            issuesDescription.AppendLine("Syntax Errors:");
+            foreach (var error in review.SyntaxErrors)
+            {
+                issuesDescription.AppendLine($"  - Line {error.Line}: {error.Description}");
+                if (!string.IsNullOrEmpty(error.SuggestedFix))
+                    issuesDescription.AppendLine($"    Fix: {error.SuggestedFix}");
+            }
+        }
+
+        if (review.LogicIssues.Any())
+        {
+            issuesDescription.AppendLine("Logic Issues:");
+            foreach (var issue in review.LogicIssues)
+            {
+                issuesDescription.AppendLine($"  - {issue.Description}");
+            }
+        }
+
+        if (review.SecurityConcerns.Any())
+        {
+            issuesDescription.AppendLine("Security Concerns:");
+            foreach (var concern in review.SecurityConcerns)
+            {
+                issuesDescription.AppendLine($"  - {concern.Description}");
+            }
+        }
+
+        var fixPrompt = $@"Fix the following issues in the code:
+
+{issuesDescription}
 
 Original code:
 ```
-{initialCode}
+{code}
 ```
 
 Provide the corrected code:";
 
-            initialCode = await InvokePromptAsync(fixPrompt);
-        }
-
-        _logger.Warning("Max reflection iterations reached");
-        return CodeGenerationResult.WithWarning(initialCode, "Max reflection iterations reached. Please review carefully.");
+        return await InvokePromptAsync(fixPrompt);
     }
 
     private async Task<string> InvokePromptAsync(string prompt)
