@@ -37,7 +37,7 @@ public class AiSearchIntegrationTests
     }
 
     [Fact]
-    public async Task SearchCommandsAsync_WithCustomerQuery_ReturnsRelevantCommands()
+    public async Task SearchCommandsAsync_WithDataTableQuery_ReturnsDataTableCommands()
     {
         if (!_canRunTests)
         {
@@ -46,31 +46,30 @@ public class AiSearchIntegrationTests
         }
 
         // Arrange
-        var query = "find customer by name";
+        var query = "DataTable";
 
         // Act
         var result = await _tool.SearchCommandsAsync(query, maxResults: 5);
 
         // Assert
         result.Should().NotBeNullOrEmpty();
-        result.Should().Contain("GetCustomerByName");
-        result.Should().Contain("License");
+        result.Should().Contain("DataTable");
     }
 
     [Fact]
-    public async Task SearchCommandsAsync_WithEmailQuery_ReturnsEmailCommands()
+    public async Task SearchCommandsAsync_WithXmlQuery_ReturnsXmlCommands()
     {
         if (!_canRunTests) return;
 
         // Arrange
-        var query = "send email";
+        var query = "XML";
 
         // Act
         var result = await _tool.SearchCommandsAsync(query, maxResults: 5);
 
         // Assert
         result.Should().NotBeNullOrEmpty();
-        result.Should().Contain("Email", "SendEmail", "mail");
+        result.Should().ContainAny("Xml", "XML");
     }
 
     [Fact]

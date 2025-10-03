@@ -5,7 +5,7 @@
         <LangVersion>13.0</LangVersion>
         <Nullable>enable</Nullable>
         <ImplicitUsings>enable</ImplicitUsings>
-        <OutputType>Library</OutputType>
+        <OutputType>Exe</OutputType>
     </PropertyGroup>
 
     <ItemGroup>
@@ -14,7 +14,7 @@
         <PackageReference Include="Microsoft.SemanticKernel.Connectors.OpenAI" Version="1.25.0" />
         
         <!-- OpenAI SDK -->
-        <PackageReference Include="Azure.AI.OpenAI" Version="2.0.0" />
+        <PackageReference Include="Azure.AI.OpenAI" Version="2.1.0-beta.1" />
         
         <!-- Storage -->
         <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.0" />
@@ -37,9 +37,16 @@
         <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2739.15" />
         <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="9.0.0" />
         <PackageReference Include="System.Windows.Forms" Version="4.0.0" />
-        
+
+        <!-- Security -->
+        <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="9.0.0" />
+
         <!-- Utilities -->
         <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <FrameworkReference Include="Microsoft.AspNetCore.App" />
     </ItemGroup>
 
     <ItemGroup>
