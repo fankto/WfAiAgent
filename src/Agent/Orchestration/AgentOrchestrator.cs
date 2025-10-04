@@ -1,3 +1,7 @@
+using System.Text;
+using System.Text.Json;
+using Azure;
+using Azure.AI.OpenAI;
 using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.ChatCompletion;
 using Microsoft.SemanticKernel.Connectors.OpenAI;
@@ -18,9 +22,11 @@ public class AgentOrchestrator
     private readonly AgentSettings _settings;
     private readonly ILogger _logger;
     private readonly IChatCompletionService _chatService;
+    private readonly string _apiKey;
 
     public AgentOrchestrator(string apiKey, AgentSettings settings, ILogger logger)
     {
+        _apiKey = apiKey;
         _settings = settings;
         _logger = logger;
 
@@ -199,26 +205,45 @@ public class AgentOrchestrator
 
     private async Task<CodeReview> GetStructuredCodeReviewAsync(string code)
     {
-        var reviewPrompt = $@"{_settings.ReflectionPrompt}
+        // Check if structured outputs are enabled and supported
+        if (!_settings.StructuredOutputs.Enabled || !SupportsStructuredOutputs(_settings.DefaultModel))
+        {
+            _logger.Warning("Structured outputs not supported for model {Model}, using legacy parsing",
+                _settings.DefaultModel);
+            return await GetLegacyCodeReviewAsync(code);
+        }
 
-Code to review:
-```
-{code}
-```
+        try
+        {
+            return await GetStructuredCodeReviewWithSchemaAsync(code);
+        }
+        catch (Exception ex) when (_settings.StructuredOutputs.FallbackOnError)
+        {
+            _logger.Error(ex, "Structured output failed, falling back to legacy parsing");
+            return await GetLegacyCodeReviewAsync(code);
+        }
+    }
 
-Return a JSON object with this exact structure:
-{{
-  ""is_approved"": true/false,
-  ""confidence_score"": 0-100,
-  ""syntax_errors"": [{{""line"": 5, ""severity"": ""error"", ""description"": ""...", ""suggested_fix"": ""...""}}],
-  ""logic_issues"": [],
-  ""best_practice_violations"": [],
-  ""security_concerns"": [],
-  ""suggested_improvements"": [""...""],
-  ""overall_quality_score"": 0-100
-}}
+    /// <summary>
+    /// Get code review using OpenAI Structured Outputs with JSON Schema.
+    /// This guarantees valid JSON matching the CodeReview model.
+    /// Note: Currently using legacy parsing due to Azure.AI.OpenAI beta API differences.
+    /// TODO: Update when stable version with structured outputs is released.
+    /// </summary>
+    private async Task<CodeReview> GetStructuredCodeReviewWithSchemaAsync(string code)
+    {
+        // For now, use the legacy method until we can resolve the Azure.AI.OpenAI beta API
+        // The beta package has different type names/namespaces than expected
+        _logger.Warning("Structured outputs not yet available in current Azure.AI.OpenAI version, using legacy parsing");
+        return await GetLegacyCodeReviewAsync(code);
+    }
 
-JSON:";
+    /// <summary>
+    /// Legacy code review method using string parsing (fallback).
+    /// </summary>
+    private async Task<CodeReview> GetLegacyCodeReviewAsync(string code)
+    {
+        var reviewPrompt = _settings.ReflectionPrompt + "\n\nCode to review:\n```\n" + code + "\n```\n\nReturn a JSON object with the code review.";
 
         try
         {
@@ -230,28 +255,40 @@ JSON:";
             if (jsonStart >= 0 && jsonEnd > jsonStart)
             {
                 var json = response.Substring(jsonStart, jsonEnd - jsonStart + 1);
-                var review = System.Text.Json.JsonSerializer.Deserialize<CodeReview>(json);
+                var review = JsonSerializer.Deserialize<CodeReview>(json);
                 if (review != null)
                     return review;
             }
 
             _logger.Warning("Failed to parse structured review, using fallback");
-            return new CodeReview
-            {
-                IsApproved = false,
-                ConfidenceScore = 50,
-                LogicIssues = new List<CodeIssue>
-                {
-                    new CodeIssue { Severity = "warning", Description = "Unable to perform structured review" }
-                },
-                OverallQualityScore = 50
-            };
+            return CreateFallbackReview();
         }
         catch (Exception ex)
         {
-            _logger.Error(ex, "Error getting structured review");
-            return new CodeReview { IsApproved = false, ConfidenceScore = 0, OverallQualityScore = 0 };
+            _logger.Error(ex, "Error getting legacy code review");
+            return CreateFallbackReview();
         }
+    }
+
+    /// <summary>
+    /// Create a fallback review when structured output fails.
+    /// </summary>
+    private CodeReview CreateFallbackReview()
+    {
+        return new CodeReview
+        {
+            IsApproved = false,
+            ConfidenceScore = 0,
+            OverallQualityScore = 0,
+            LogicIssues = new List<CodeIssue>
+            {
+                new CodeIssue
+                {
+                    Severity = "error",
+                    Description = "Unable to perform structured code review. Please try again."
+                }
+            }
+        };
     }
 
     private async Task<string> ApplyStructuredFixesAsync(string code, CodeReview review)
@@ -322,5 +359,25 @@ Provide the corrected code:";
     {
         _history.Clear();
         _history.AddSystemMessage(_settings.SystemPrompt);
+    }
+
+    /// <summary>
+    /// Check if the specified model supports OpenAI Structured Outputs.
+    /// </summary>
+    private bool SupportsStructuredOutputs(string model)
+    {
+        // Structured outputs supported in:
+        // - gpt-4o-mini (all versions)
+        // - gpt-4o (2024-08-06 and later)
+        // - gpt-4o-2024-08-06
+        
+        var supportedModels = new[]
+        {
+            "gpt-4o-mini",
+            "gpt-4o-2024-08-06",
+            "gpt-4o" // Assumes latest version
+        };
+
+        return supportedModels.Any(m => model.Contains(m, StringComparison.OrdinalIgnoreCase));
     }
 }

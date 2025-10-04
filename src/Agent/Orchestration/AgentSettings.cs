@@ -17,6 +17,7 @@ public class AgentSettings
     public string CodeGenerationPrompt { get; set; } = string.Empty;
     public string ReflectionPrompt { get; set; } = string.Empty;
     public int MaxReflectionIterations { get; set; } = 3;
+    public StructuredOutputSettings StructuredOutputs { get; set; } = new();
 
     public static AgentSettings LoadFromYaml(string yamlPath)
     {
@@ -53,6 +54,37 @@ public class AgentSettings
                 settings.MaxReflectionIterations = Convert.ToInt32(safety["MaxReflectionIterations"]);
         }
         
+        if (config.ContainsKey("StructuredOutputs"))
+        {
+            var structuredOutputs = (Dictionary<object, object>)config["StructuredOutputs"];
+            settings.StructuredOutputs = new StructuredOutputSettings
+            {
+                Enabled = structuredOutputs.ContainsKey("Enabled") 
+                    ? Convert.ToBoolean(structuredOutputs["Enabled"]) 
+                    : true,
+                StrictSchemaValidation = structuredOutputs.ContainsKey("StrictSchemaValidation")
+                    ? Convert.ToBoolean(structuredOutputs["StrictSchemaValidation"])
+                    : true,
+                FallbackOnError = structuredOutputs.ContainsKey("FallbackOnError")
+                    ? Convert.ToBoolean(structuredOutputs["FallbackOnError"])
+                    : true,
+                MaxRetries = structuredOutputs.ContainsKey("MaxRetries")
+                    ? Convert.ToInt32(structuredOutputs["MaxRetries"])
+                    : 3
+            };
+        }
+        
         return settings;
     }
+}
+
+/// <summary>
+/// Configuration for OpenAI Structured Outputs feature.
+/// </summary>
+public class StructuredOutputSettings
+{
+    public bool Enabled { get; set; } = true;
+    public bool StrictSchemaValidation { get; set; } = true;
+    public bool FallbackOnError { get; set; } = true;
+    public int MaxRetries { get; set; } = 3;
 }

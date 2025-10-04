@@ -1,4 +1,5 @@
 using Serilog;
+using WorkflowPlus.AIAgent.Core.Models;
 using WorkflowPlus.AIAgent.Orchestration;
 
 namespace WorkflowPlus.AIAgent;
@@ -34,6 +35,11 @@ class Program
             // Load settings
             var settingsPath = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "agent_config.yml");
             var settings = AgentSettings.LoadFromYaml(settingsPath);
+
+            // Validate schema in debug mode
+            #if DEBUG
+            SchemaValidator.ValidateSchema();
+            #endif
 
             // Create orchestrator
             var orchestrator = new AgentOrchestrator(apiKey, settings, Log.Logger);

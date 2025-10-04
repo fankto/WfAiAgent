@@ -57,3 +57,9 @@ Safety:
   MaxCostPerQuery: 0.50
   TimeoutSeconds: 60
   MaxReflectionIterations: 3
+
+StructuredOutputs:
+  Enabled: true
+  StrictSchemaValidation: true
+  FallbackOnError: true
+  MaxRetries: 3

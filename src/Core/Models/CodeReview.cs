@@ -34,9 +34,9 @@ public class CodeReview
 
     public bool HasCriticalIssues()
     {
-        return SyntaxErrors.Any(e => e.Severity == "critical") ||
-               LogicIssues.Any(e => e.Severity == "critical") ||
-               SecurityConcerns.Any();
+        return SyntaxErrors.Any(e => e.Severity == "error") ||
+               LogicIssues.Any(e => e.Severity == "error") ||
+               SecurityConcerns.Any(e => e.Severity == "error");
     }
 
     public int TotalIssueCount()
@@ -52,7 +52,7 @@ public class CodeIssue
     public int? Line { get; set; }
 
     [JsonPropertyName("severity")]
-    public string Severity { get; set; } = "info"; // info, warning, error, critical
+    public string Severity { get; set; } = "info"; // info, warning, error
 
     [JsonPropertyName("description")]
     public string Description { get; set; } = string.Empty;
