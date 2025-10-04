@@ -40,8 +40,8 @@ public class AgentOrchestrator
         // STATE-OF-THE-ART: Create query enhancer for advanced RAG
         var queryEnhancer = new QueryEnhancer(_chatService);
 
-        // Register tools with advanced capabilities
-        builder.Plugins.AddFromObject(new SearchKnowledgeTool(queryEnhancer), "SearchKnowledge");
+        // Register tools with advanced capabilities (pass chat service for LLM relevance assessment)
+        builder.Plugins.AddFromObject(new SearchKnowledgeTool(queryEnhancer, _chatService), "SearchKnowledge");
         builder.Plugins.AddFromType<ExampleScriptMatcher>();
         builder.Plugins.AddFromType<ScriptValidationTool>();
 

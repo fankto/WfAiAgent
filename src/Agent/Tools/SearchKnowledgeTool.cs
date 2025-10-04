@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.SemanticKernel;
+using Microsoft.SemanticKernel.ChatCompletion;
 using Serilog;
 
 namespace WorkflowPlus.AIAgent.Tools;
@@ -16,9 +17,11 @@ public class SearchKnowledgeTool
     private readonly HttpClient _httpClient;
     private readonly ILogger _logger;
     private readonly QueryEnhancer? _queryEnhancer;
+    private readonly IChatCompletionService? _chatService;
     private const string AiSearchBaseUrl = "http://localhost:54321";
+    private const int MinCandidatesForAssessment = 4; // Only assess if we have more than this
 
-    public SearchKnowledgeTool(QueryEnhancer? queryEnhancer = null)
+    public SearchKnowledgeTool(QueryEnhancer? queryEnhancer = null, IChatCompletionService? chatService = null)
     {
         _httpClient = new HttpClient
         {
@@ -27,6 +30,7 @@ public class SearchKnowledgeTool
         };
         _logger = Log.ForContext<SearchKnowledgeTool>();
         _queryEnhancer = queryEnhancer;
+        _chatService = chatService;
     }
 
     [KernelFunction("search_commands")]
@@ -93,7 +97,7 @@ public class SearchKnowledgeTool
 
 
     /// <summary>
-    /// STATE-OF-THE-ART: Search using HyDE and query expansion.
+    /// STATE-OF-THE-ART: Search using HyDE and query expansion with parallel execution.
     /// This combines multiple advanced techniques for superior retrieval quality.
     /// </summary>
     private async Task<List<CommandMatch>> SearchWithAdvancedTechniquesAsync(string query, int maxResults)
@@ -106,44 +110,60 @@ public class SearchKnowledgeTool
             // Clean the query
             var cleanedQuery = _queryEnhancer!.CleanQuery(query);
 
+            // Execute all search techniques in parallel
+            var searchTasks = new List<Task<(List<CommandMatch> results, float weight, string technique)>>();
+
             // Technique 1: Search with original cleaned query
-            var originalResults = await ExecuteSearchAsync(cleanedQuery, maxResults);
-            foreach (var result in originalResults)
+            searchTasks.Add(Task.Run(async () =>
             {
-                if (!allResults.ContainsKey(result.Name))
-                {
-                    allResults[result.Name] = result;
-                    resultScores[result.Name] = new List<float>();
-                }
-                resultScores[result.Name].Add(result.Score * 1.0f); // Base weight
-            }
+                var results = await ExecuteSearchAsync(cleanedQuery, maxResults);
+                return (results, 1.0f, "original");
+            }));
 
             // Technique 2: HyDE - Generate hypothetical document and search
-            var hypotheticalDoc = await _queryEnhancer.GenerateHypotheticalDocumentAsync(query);
-            var hydeResults = await ExecuteSearchAsync(hypotheticalDoc, maxResults);
-            foreach (var result in hydeResults)
+            searchTasks.Add(Task.Run(async () =>
             {
-                if (!allResults.ContainsKey(result.Name))
-                {
-                    allResults[result.Name] = result;
-                    resultScores[result.Name] = new List<float>();
-                }
-                resultScores[result.Name].Add(result.Score * 0.8f); // Slightly lower weight
-            }
+                var hypotheticalDoc = await _queryEnhancer.GenerateHypotheticalDocumentAsync(query);
+                var results = await ExecuteSearchAsync(hypotheticalDoc, maxResults);
+                return (results, 0.8f, "hyde");
+            }));
 
-            // Technique 3: Query Expansion - Search multiple variations
-            var expandedQueries = await _queryEnhancer.ExpandQueryAsync(cleanedQuery);
-            foreach (var expandedQuery in expandedQueries.Take(2)) // Limit to 2 to control latency
+            // Technique 3: Query Expansion - Generate and search multiple variations
+            searchTasks.Add(Task.Run(async () =>
             {
-                var expandedResults = await ExecuteSearchAsync(expandedQuery, maxResults);
-                foreach (var result in expandedResults)
+                var expandedQueries = await _queryEnhancer.ExpandQueryAsync(cleanedQuery);
+                var expansionResults = new List<CommandMatch>();
+                
+                // Search all expansions in parallel
+                var expansionTasks = expandedQueries.Take(2)
+                    .Select(eq => ExecuteSearchAsync(eq, maxResults))
+                    .ToList();
+                
+                var allExpansionResults = await Task.WhenAll(expansionTasks);
+                foreach (var results in allExpansionResults)
+                {
+                    expansionResults.AddRange(results);
+                }
+                
+                return (expansionResults, 0.7f, "expansion");
+            }));
+
+            // Wait for all search techniques to complete
+            var allSearchResults = await Task.WhenAll(searchTasks);
+
+            // Aggregate results from all techniques
+            foreach (var (results, weight, technique) in allSearchResults)
+            {
+                _logger.Debug("Technique '{Technique}' returned {Count} results", technique, results.Count);
+                
+                foreach (var result in results)
                 {
                     if (!allResults.ContainsKey(result.Name))
                     {
                         allResults[result.Name] = result;
                         resultScores[result.Name] = new List<float>();
                     }
-                    resultScores[result.Name].Add(result.Score * 0.7f); // Lower weight for expansions
+                    resultScores[result.Name].Add(result.Score * weight);
                 }
             }
 
@@ -156,22 +176,118 @@ public class SearchKnowledgeTool
                 allResults[name] = match;
             }
 
-            // Return top results by aggregated score
-            var finalResults = allResults.Values
+            // Get candidates sorted by score
+            var candidates = allResults.Values
                 .OrderByDescending(r => r.Score)
-                .Take(maxResults)
                 .ToList();
 
-            _logger.Information("Advanced search returned {Count} unique results (from {Total} total hits)",
-                finalResults.Count, resultScores.Sum(kvp => kvp.Value.Count));
+            _logger.Information("Advanced search returned {Count} unique candidates (from {Total} total hits)",
+                candidates.Count, resultScores.Sum(kvp => kvp.Value.Count));
 
-            return finalResults;
+            // Apply LLM relevance assessment if we have enough candidates
+            if (candidates.Count > MinCandidatesForAssessment && _chatService != null)
+            {
+                var relevantResults = await AssessRelevanceAsync(query, candidates, maxResults);
+                if (relevantResults.Count > 0)
+                {
+                    return relevantResults;
+                }
+                _logger.Warning("LLM assessment returned no results, falling back to score-based ranking");
+            }
+
+            // Return top results by aggregated score (fallback or when assessment not needed)
+            return candidates.Take(maxResults).ToList();
         }
         catch (Exception ex)
         {
             _logger.Error(ex, "Advanced search failed, falling back to basic search");
             return await ExecuteSearchAsync(query, maxResults);
         }
+    }
+
+    /// <summary>
+    /// Use LLM to assess which candidates are truly relevant to the user's query.
+    /// This filters out semantically similar but contextually irrelevant results.
+    /// </summary>
+    private async Task<List<CommandMatch>> AssessRelevanceAsync(string userQuery, List<CommandMatch> candidates, int maxResults)
+    {
+        _logger.Information("Assessing relevance of {Count} candidates using LLM", candidates.Count);
+
+        try
+        {
+            // Build candidate summary (name + brief description only, to save tokens)
+            var candidateSummary = new StringBuilder();
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                var cmd = candidates[i];
+                candidateSummary.AppendLine($"{i + 1}. {cmd.Name} - {TruncateDescription(cmd.Description, 100)}");
+            }
+
+            var assessmentPrompt = $@"User's search query: ""{userQuery}""
+
+Found {candidates.Count} candidate commands:
+{candidateSummary}
+
+Task: Determine which commands are TRULY relevant for solving the user's query.
+- Consider the user's actual intent, not just keyword matches
+- A command is relevant if it directly helps accomplish the user's goal
+- Exclude commands that are only tangentially related
+- Select between 1 and {maxResults} commands
+
+Return ONLY a JSON object with this structure:
+{{
+  ""relevant_command_names"": [""CommandName1"", ""CommandName2""],
+  ""reasoning"": ""Brief explanation of why these commands were selected""
+}}";
+
+            var response = await _chatService!.GetChatMessageContentAsync(assessmentPrompt);
+            var content = response.Content?.Trim() ?? "";
+
+            // Extract JSON from response (handle markdown code blocks)
+            var jsonStart = content.IndexOf('{');
+            var jsonEnd = content.LastIndexOf('}');
+            if (jsonStart >= 0 && jsonEnd > jsonStart)
+            {
+                var json = content.Substring(jsonStart, jsonEnd - jsonStart + 1);
+                var assessment = JsonSerializer.Deserialize<RelevanceAssessment>(json, new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                });
+
+                if (assessment?.RelevantCommandNames != null && assessment.RelevantCommandNames.Count > 0)
+                {
+                    // Filter candidates to only include assessed relevant commands
+                    var relevantResults = candidates
+                        .Where(c => assessment.RelevantCommandNames.Contains(c.Name, StringComparer.OrdinalIgnoreCase))
+                        .Take(maxResults)
+                        .ToList();
+
+                    _logger.Information("LLM selected {Selected} of {Total} candidates as relevant. Reasoning: {Reasoning}",
+                        relevantResults.Count, candidates.Count, assessment.Reasoning);
+
+                    return relevantResults;
+                }
+            }
+
+            _logger.Warning("Failed to parse LLM assessment response");
+            return new List<CommandMatch>();
+        }
+        catch (Exception ex)
+        {
+            _logger.Error(ex, "Error during LLM relevance assessment");
+            return new List<CommandMatch>();
+        }
+    }
+
+    /// <summary>
+    /// Truncate description to specified length for token efficiency
+    /// </summary>
+    private string TruncateDescription(string description, int maxLength)
+    {
+        if (string.IsNullOrEmpty(description) || description.Length <= maxLength)
+            return description;
+        
+        return description.Substring(0, maxLength) + "...";
     }
 
     /// <summary>
@@ -219,6 +335,13 @@ public class SearchKnowledgeTool
             _logger.Error(ex, "Error executing search for query: {Query}", query);
             return new List<CommandMatch>();
         }
+    }
+
+    // DTOs for LLM relevance assessment
+    private class RelevanceAssessment
+    {
+        public List<string> RelevantCommandNames { get; set; } = new();
+        public string Reasoning { get; set; } = string.Empty;
     }
 
     // DTOs matching AiSearch API response
