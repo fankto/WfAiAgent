@@ -1,0 +1,48 @@
+# Multi-Agent Orchestration Configuration
+# This configuration enables the unified multi-agent pattern for all requests
+
+MultiAgentOrchestration:
+  # Maximum number of specialist agents that can run concurrently
+  MaxConcurrentAgents: 10
+  
+  # Maximum number of subtasks allowed per request
+  MaxSubTasksPerRequest: 20
+  
+  # Timeout for individual agent execution (seconds)
+  AgentTimeoutSeconds: 30
+  
+  # Model selection for different stages
+  Models:
+    # Fast model for task decomposition
+    DecompositionModel: "gpt-4o-mini"
+    
+    # Fast model for script assembly
+    AssemblyModel: "gpt-4o-mini"
+    
+    # Main model for specialist agent searches
+    SpecialistModel: "gpt-4o"
+  
+  # Timeout configuration for each stage
+  Timeouts:
+    # Task decomposition timeout (seconds)
+    TaskDecompositionSeconds: 10
+    
+    # Specialist search timeout (seconds)
+    SpecialistSearchSeconds: 15
+    
+    # Script assembly timeout (seconds)
+    ScriptAssemblySeconds: 10
+  
+  # Logging configuration
+  Logging:
+    # Log decomposition details
+    LogDecomposition: true
+    
+    # Log agent execution details
+    LogAgentExecution: true
+    
+    # Log script assembly details
+    LogAssembly: true
+    
+    # Log verbose metrics
+    VerboseMetrics: true
