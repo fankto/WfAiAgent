@@ -7,6 +7,8 @@ namespace WorkflowPlus.AIAgent.Core.Models;
 /// JSON Schema definition for structured code review output.
 /// This schema is used with OpenAI's Structured Outputs feature to guarantee
 /// valid JSON responses that match the CodeReview model.
+/// 
+/// This is the C# equivalent of Pydantic's model_json_schema() in Python.
 /// </summary>
 public static class CodeReviewSchema
 {
@@ -75,6 +77,73 @@ public static class CodeReviewSchema
         };
 
         return BinaryData.FromObjectAsJson(schema);
+    }
+
+    /// <summary>
+    /// Get the JSON Schema as a string (for OpenAI SDK v2.0).
+    /// </summary>
+    public static string GetSchemaAsString()
+    {
+        var schema = new
+        {
+            type = "object",
+            properties = new
+            {
+                is_approved = new
+                {
+                    type = "boolean",
+                    description = "Whether the code is approved for use without modifications"
+                },
+                confidence_score = new
+                {
+                    type = "integer",
+                    minimum = 0,
+                    maximum = 100,
+                    description = "Confidence in this review assessment (0-100)"
+                },
+                syntax_errors = new
+                {
+                    type = "array",
+                    description = "List of syntax errors found in the code",
+                    items = GetCodeIssueSchema()
+                },
+                logic_issues = new
+                {
+                    type = "array",
+                    description = "List of logical problems or bugs in the code",
+                    items = GetCodeIssueSchema()
+                },
+                best_practice_violations = new
+                {
+                    type = "array",
+                    description = "List of code style or best practice violations",
+                    items = GetCodeIssueSchema()
+                },
+                security_concerns = new
+                {
+                    type = "array",
+                    description = "List of potential security vulnerabilities",
+                    items = GetCodeIssueSchema()
+                },
+                suggested_improvements = new
+                {
+                    type = "array",
+                    description = "General suggestions for improving the code",
+                    items = new { type = "string" }
+                },
+                overall_quality_score = new
+                {
+                    type = "integer",
+                    minimum = 0,
+                    maximum = 100,
+                    description = "Overall code quality score (0-100)"
+                }
+            },
+            required = new[] { "is_approved", "confidence_score", "overall_quality_score" },
+            additionalProperties = false
+        };
+
+        return JsonSerializer.Serialize(schema);
     }
 
     /// <summary>

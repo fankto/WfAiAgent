@@ -2,11 +2,13 @@ using System.Text;
 using System.Text.Json;
 using Azure;
 using Azure.AI.OpenAI;
+using FluentValidation;
 using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.ChatCompletion;
 using Microsoft.SemanticKernel.Connectors.OpenAI;
 using Serilog;
 using WorkflowPlus.AIAgent.Core.Models;
+using WorkflowPlus.AIAgent.Core.Validation;
 using WorkflowPlus.AIAgent.Tools;
 
 namespace WorkflowPlus.AIAgent.Orchestration;
@@ -23,12 +25,16 @@ public class AgentOrchestrator
     private readonly ILogger _logger;
     private readonly IChatCompletionService _chatService;
     private readonly string _apiKey;
+    private readonly CodeReviewValidator _codeReviewValidator;
 
     public AgentOrchestrator(string apiKey, AgentSettings settings, ILogger logger)
     {
         _apiKey = apiKey;
         _settings = settings;
         _logger = logger;
+        
+        // Initialize Pydantic-equivalent validator
+        _codeReviewValidator = new CodeReviewValidator();
 
         // Build Semantic Kernel
         var builder = Kernel.CreateBuilder();
@@ -51,6 +57,19 @@ public class AgentOrchestrator
         _history = new ChatHistory(_settings.SystemPrompt);
 
         _logger.Information("AgentOrchestrator initialized with model {Model} and advanced RAG techniques", _settings.DefaultModel);
+        
+        // Validate schema on startup (like Pydantic does)
+        #if DEBUG
+        try
+        {
+            Core.Validation.SchemaValidator.ValidateSchema();
+        }
+        catch (Exception ex)
+        {
+            _logger.Error(ex, "Schema validation failed - model and schema are out of sync!");
+            throw;
+        }
+        #endif
     }
 
     /// <summary>
@@ -205,37 +224,25 @@ public class AgentOrchestrator
 
     private async Task<CodeReview> GetStructuredCodeReviewAsync(string code)
     {
-        // Check if structured outputs are enabled and supported
-        if (!_settings.StructuredOutputs.Enabled || !SupportsStructuredOutputs(_settings.DefaultModel))
-        {
-            _logger.Warning("Structured outputs not supported for model {Model}, using legacy parsing",
-                _settings.DefaultModel);
-            return await GetLegacyCodeReviewAsync(code);
-        }
-
+        // Get code review using legacy parsing
+        var review = await GetLegacyCodeReviewAsync(code);
+        
+        // Validate with FluentValidation (Pydantic-equivalent)
         try
         {
-            return await GetStructuredCodeReviewWithSchemaAsync(code);
+            _codeReviewValidator.ValidateAndThrow(review);
+            _logger.Information("Code review validated successfully with FluentValidation");
         }
-        catch (Exception ex) when (_settings.StructuredOutputs.FallbackOnError)
+        catch (ValidationException ex)
         {
-            _logger.Error(ex, "Structured output failed, falling back to legacy parsing");
-            return await GetLegacyCodeReviewAsync(code);
+            _logger.Warning("Code review validation failed: {Errors}",
+                string.Join("; ", ex.Errors.Select(e => e.ErrorMessage)));
+            
+            // Continue with unvalidated review (log warnings but don't fail)
+            // This allows the system to work even if validation rules are too strict
         }
-    }
-
-    /// <summary>
-    /// Get code review using OpenAI Structured Outputs with JSON Schema.
-    /// This guarantees valid JSON matching the CodeReview model.
-    /// Note: Currently using legacy parsing due to Azure.AI.OpenAI beta API differences.
-    /// TODO: Update when stable version with structured outputs is released.
-    /// </summary>
-    private async Task<CodeReview> GetStructuredCodeReviewWithSchemaAsync(string code)
-    {
-        // For now, use the legacy method until we can resolve the Azure.AI.OpenAI beta API
-        // The beta package has different type names/namespaces than expected
-        _logger.Warning("Structured outputs not yet available in current Azure.AI.OpenAI version, using legacy parsing");
-        return await GetLegacyCodeReviewAsync(code);
+        
+        return review;
     }
 
     /// <summary>
@@ -361,23 +368,4 @@ Provide the corrected code:";
         _history.AddSystemMessage(_settings.SystemPrompt);
     }
 
-    /// <summary>
-    /// Check if the specified model supports OpenAI Structured Outputs.
-    /// </summary>
-    private bool SupportsStructuredOutputs(string model)
-    {
-        // Structured outputs supported in:
-        // - gpt-4o-mini (all versions)
-        // - gpt-4o (2024-08-06 and later)
-        // - gpt-4o-2024-08-06
-        
-        var supportedModels = new[]
-        {
-            "gpt-4o-mini",
-            "gpt-4o-2024-08-06",
-            "gpt-4o" // Assumes latest version
-        };
-
-        return supportedModels.Any(m => model.Contains(m, StringComparison.OrdinalIgnoreCase));
-    }
 }
