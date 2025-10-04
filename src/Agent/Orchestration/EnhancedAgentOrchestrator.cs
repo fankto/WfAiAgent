@@ -1,4 +1,6 @@
+using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.ChatCompletion;
+using Microsoft.SemanticKernel.Connectors.OpenAI;
 using Serilog;
 using WorkflowPlus.AIAgent.Core.Models;
 using WorkflowPlus.AIAgent.MultiAgent;
@@ -88,25 +90,20 @@ public class EnhancedAgentOrchestrator
                 }
             }
 
+            // Format metrics as part of content
+            var metricsInfo = $"\n\n// Metrics: {result.Metrics.SubTaskCount} subtasks, " +
+                             $"{result.Metrics.TotalCommandsFound} commands, " +
+                             $"{result.Metrics.TotalTime.TotalSeconds:F2}s";
+            
             return new AgentResponse
             {
-                Content = result.Script,
+                Content = result.Script + metricsInfo,
                 ConversationId = conversationId,
                 TokensUsed = 0, // TODO: Extract from metrics
                 EstimatedCost = result.Metrics.EstimatedCost,
                 ModelUsed = _settings.DefaultModel,
                 ToolCalls = new List<ToolCallResult>(),
-                Success = true,
-                Metadata = new Dictionary<string, object>
-                {
-                    ["SubTaskCount"] = result.Metrics.SubTaskCount,
-                    ["TotalCommandsFound"] = result.Metrics.TotalCommandsFound,
-                    ["DecompositionTime"] = result.Metrics.DecompositionTime.TotalMilliseconds,
-                    ["SearchTime"] = result.Metrics.SearchTime.TotalMilliseconds,
-                    ["AssemblyTime"] = result.Metrics.AssemblyTime.TotalMilliseconds,
-                    ["TotalTime"] = result.Metrics.TotalTime.TotalMilliseconds,
-                    ["Warnings"] = result.Warnings
-                }
+                Success = true
             };
         }
         catch (Exception ex)
@@ -124,8 +121,7 @@ public class EnhancedAgentOrchestrator
 
     private IChatCompletionService CreateChatService(string apiKey, AgentSettings settings)
     {
-        // Create a simple chat service
-        // In production, this would use the full Semantic Kernel setup
+        // Create a simple chat service using Semantic Kernel
         var builder = Microsoft.SemanticKernel.Kernel.CreateBuilder();
         builder.AddOpenAIChatCompletion(settings.DefaultModel, apiKey);
         var kernel = builder.Build();
